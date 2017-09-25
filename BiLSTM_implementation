@@ -1,0 +1,331 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### RNN forward networks"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "import tensorflow as tf\n",
+    "def lstm_update(X, state, input_gate, forget_gate, output_gate, cell_gate):\n",
+    "    next_state = forget_gate * state + input_gate * cell_gate\n",
+    "    next_output = tf.tanh(next_state) * output_gate\n",
+    "    return next_state, next_output\n",
+    "\n",
+    "def lstm_forward(X, ini_state, input_dim, num_nodes, initializer, forget_bias, steps, direction, reuse=None):\n",
+    "    with tf.variable_scope('LSTM_gate_parameters_%s' % direction, reuse=reuse):\n",
+    "      # Input gate\n",
+    "      ug = tf.get_variable('U_g', shape=[input_dim, num_nodes], initializer=initializer)\n",
+    "      wg = tf.get_variable('W_g', shape=[num_nodes, num_nodes], initializer=initializer)\n",
+    "      bg = tf.get_variable('b_g', shape=[num_nodes], initializer=tf.zeros_initializer())\n",
+    "    \n",
+    "      # Forget gate\n",
+    "      uf = tf.get_variable('U_f', shape=[input_dim, num_nodes], initializer=initializer)\n",
+    "      wf = tf.get_variable('W_f', shape=[num_nodes, num_nodes], initializer=initializer)\n",
+    "      bf = tf.get_variable('b_f', shape=[num_nodes], initializer=forget_bias)\n",
+    "    \n",
+    "      # Output gate\n",
+    "      uo = tf.get_variable('U_o', shape=[input_dim, num_nodes], initializer=initializer)\n",
+    "      wo = tf.get_variable('W_o', shape=[num_nodes, num_nodes], initializer=initializer)\n",
+    "      bo = tf.get_variable('b_o', shape=[num_nodes], initializer=tf.zeros_initializer())\n",
+    "\n",
+    "      # Cell gate\n",
+    "      uc = tf.get_variable('U_c', shape=[input_dim, num_nodes], initializer=initializer)\n",
+    "      wc = tf.get_variable('W_c', shape=[num_nodes, num_nodes], initializer=initializer)\n",
+    "      bc = tf.get_variable('b_c', shape=[num_nodes], initializer=tf.zeros_initializer())\n",
+    "    \n",
+    "      # Concate gate parameters for parallelization\n",
+    "      U = tf.concat([ug, uf, uo, uc], axis=1)\n",
+    "      W = tf.concat([wg, wf, wo, wc], axis=1)\n",
+    "      b = tf.concat([bg, bf, bo, bc], axis=0)\n",
+    "    \n",
+    "    # Initialization step=0\n",
+    "    q = tf.sigmoid(tf.matmul(X[:, 0, :], uo) + tf.matmul(ini_state, wo) + bo)\n",
+    "    \n",
+    "    # output and state at step=0\n",
+    "    output = tf.tanh(ini_state) * q\n",
+    "    state = ini_state\n",
+    "    \n",
+    "    for i in range(1, steps):\n",
+    "        update = tf.sigmoid(tf.matmul(X[:, i, :], U) + tf.matmul(output, W) + b)\n",
+    "        g, f, o, c = tf.split(update, 4, axis=1)\n",
+    "        state, output = lstm_update(X[:, i, :], state, g, f, o, c)\n",
+    "    return state, output"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "import tensorflow as tf\n",
+    "\n",
+    "num_cell = 128\n",
+    "\n",
+    "hidden_units = 30\n",
+    "\n",
+    "def bi_rnn_forward(inputs):\n",
+    "    batch_size = inputs.get_shape()[0]\n",
+    "    ini = tf.zeros(shape=[100, num_cell])\n",
+    "    fw_state, fw_output = lstm_forward(inputs, ini, 128, \n",
+    "                                 num_cell, \n",
+    "                                 tf.contrib.layers.xavier_initializer(), \n",
+    "                                 tf.zeros_initializer(), \n",
+    "                                 100,\n",
+    "                                 'fw')\n",
+    "    \n",
+    "    reverse_inputs = tf.reverse(inputs, axis=[1])\n",
+    "    \n",
+    "    bw_state, bw_output = lstm_forward(reverse_inputs, ini, 128, \n",
+    "                                 num_cell, \n",
+    "                                 tf.contrib.layers.xavier_initializer(), \n",
+    "                                 tf.zeros_initializer(), \n",
+    "                                 100,\n",
+    "                                 'bw')\n",
+    "  \n",
+    "    # Logistic layers, choose the last time step as inputs\n",
+    "    h_inputs = tf.concat([fw_output, bw_output], axis=1)\n",
+    "    \n",
+    "    before_outputs = tf.contrib.layers.fully_connected(h_inputs, hidden_units, activation_fn=tf.nn.relu)\n",
+    "    outputs = tf.contrib.layers.fully_connected(before_outputs, 1, activation_fn=None)\n",
+    "    return outputs"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Read IMDB dataset using Keras API"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Using TensorFlow backend.\n"
+     ]
+    }
+   ],
+   "source": [
+    "from keras.datasets import imdb\n",
+    "from keras.preprocessing import sequence\n",
+    "import numpy as np\n",
+    "\n",
+    "(x_train, y_train), (x_test, y_test) = imdb.load_data(path=\"imdb.npz\",\n",
+    "                                                      num_words=10000,\n",
+    "                                                      skip_top=0,\n",
+    "                                                      maxlen=None,\n",
+    "                                                      seed=113,\n",
+    "                                                      start_char=1,\n",
+    "                                                      oov_char=2,\n",
+    "                                                      index_from=3)\n",
+    "\n",
+    "def generate_dataset(x_train, y_train, batch_num):\n",
+    "    indices = np.arange(y_train.shape[0])\n",
+    "    np.random.shuffle(indices)\n",
+    "    x_train, y_train = x_train[indices], y_train[indices]\n",
+    "    xs = np.split(x_train, batch_num)\n",
+    "    ys = np.split(y_train, batch_num)\n",
+    "    return xs, ys\n",
+    "\n",
+    "  \n",
+    "def max_len(sentences):\n",
+    "    sequence_length = max(len(x) for x in sentences)\n",
+    "    return sequence_length"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Build graph"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "X = tf.placeholder(name='inputs', shape=[None, None], dtype=tf.int32)\n",
+    "y = tf.placeholder(name='labels', shape=[None, 1], dtype=tf.float32)\n",
+    "\n",
+    "# Embedding matrix\n",
+    "num_words = 10000\n",
+    "embedding_size = 128\n",
+    "embedding = tf.get_variable('Embedding', shape=[num_words, embedding_size], initializer=tf.random_uniform_initializer(-1., 1.))\n",
+    "\n",
+    "# Convert tokens into word vectors\n",
+    "embedded = tf.nn.embedding_lookup(embedding, X)\n",
+    "\n",
+    "logits = bi_rnn_forward(embedded)\n",
+    "\n",
+    "loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=y, logits=logits))\n",
+    "\n",
+    "probs = tf.sigmoid(logits)\n",
+    "\n",
+    "train_op = tf.train.AdamOptimizer(0.01).minimize(loss)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Training"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {
+    "scrolled": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch 0, step 0 \n",
+      "Train loss and accuracy  0.690977 0.52 \n",
+      "\n",
+      "Epoch 0, step 50 \n",
+      "Train loss and accuracy  0.69111 0.53 \n",
+      "\n",
+      "Epoch 0, step 100 \n",
+      "Train loss and accuracy  0.644542 0.69 \n",
+      "\n",
+      "Epoch 0, step 150 \n",
+      "Train loss and accuracy  0.527349 0.74 \n",
+      "\n",
+      "Epoch 0, step 200 \n",
+      "Train loss and accuracy  0.445612 0.8 \n",
+      "\n",
+      "Epoch 1, step 0 \n",
+      "Train loss and accuracy  0.315693 0.91 \n",
+      "\n",
+      "Epoch 1, step 50 \n",
+      "Train loss and accuracy  0.314145 0.88 \n",
+      "\n",
+      "Epoch 1, step 100 \n",
+      "Train loss and accuracy  0.39216 0.85 \n",
+      "\n",
+      "Epoch 1, step 150 \n",
+      "Train loss and accuracy  0.370596 0.84 \n",
+      "\n",
+      "Epoch 1, step 200 \n",
+      "Train loss and accuracy  0.340789 0.85 \n",
+      "\n",
+      "Epoch 2, step 0 \n",
+      "Train loss and accuracy  0.261349 0.91 \n",
+      "\n",
+      "Epoch 2, step 50 \n",
+      "Train loss and accuracy  0.271609 0.91 \n",
+      "\n",
+      "Epoch 2, step 100 \n",
+      "Train loss and accuracy  0.267397 0.91 \n",
+      "\n",
+      "Epoch 2, step 150 \n",
+      "Train loss and accuracy  0.228646 0.94 \n",
+      "\n",
+      "Epoch 2, step 200 \n",
+      "Train loss and accuracy  0.245157 0.91 \n",
+      "\n",
+      "Test accuracy  0.84276 \n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "num_epochs = 3\n",
+    "batch_size = 100\n",
+    "batch_num = y_train.shape[0] / batch_size\n",
+    "\n",
+    "with tf.Session() as sess:\n",
+    "    tf.global_variables_initializer().run()\n",
+    "    for k in range(num_epochs):\n",
+    "        xs, ys = generate_dataset(x_train, y_train, batch_num)\n",
+    "        for j in range(batch_num):\n",
+    "            \n",
+    "            # We can pass different time step at every iteration of dynamic RNN\n",
+    "            maxlen = max_len(xs[j])\n",
+    "            if maxlen > 100:\n",
+    "                maxlen = 100\n",
+    "                \n",
+    "            X_feed = sequence.pad_sequences(xs[j], maxlen=maxlen)\n",
+    "            y_feed = ys[j].reshape(batch_size, 1)\n",
+    "            loss_val, _ , probs_val = sess.run([loss, train_op, probs], feed_dict={X: X_feed, y: y_feed})\n",
+    "            \n",
+    "            if j % 50 == 0:\n",
+    "                predictions = [1 if i > 0.5 else 0 for i in probs_val]\n",
+    "                accurate_pred = predictions == ys[j]\n",
+    "                print \"Epoch %d, step %d \" % (k, j)\n",
+    "                print \"Train loss and accuracy \", loss_val, float(sum(accurate_pred)) / batch_size, \"\\n\"\n",
+    "                \n",
+    "    # Test performance\n",
+    "    test_xs, test_ys = generate_dataset(x_test, y_test, batch_num)\n",
+    "    acc_count = []\n",
+    "    for j in range(batch_num):\n",
+    "    # We can pass different time step at every iteration of dynamic RNN\n",
+    "        maxlen = max_len(test_xs[j])\n",
+    "        if maxlen > 100:\n",
+    "            maxlen = 100\n",
+    "                \n",
+    "        X_feed = sequence.pad_sequences(test_xs[j], maxlen=maxlen)\n",
+    "        y_feed = test_ys[j].reshape(batch_size, 1)\n",
+    "        probs_val = sess.run(probs, feed_dict={X: X_feed, y: y_feed})\n",
+    "        predictions = [1 if i > 0.5 else 0 for i in probs_val]\n",
+    "        accurate_pred = predictions == test_ys[j]\n",
+    "        acc_count.append(sum(accurate_pred))\n",
+    "    \n",
+    "    print \"Test accuracy \", float(sum(acc_count)) / y_test.shape[0], \"\\n\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 2",
+   "language": "python",
+   "name": "python2"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 2
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython2",
+   "version": "2.7.6"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
