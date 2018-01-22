@@ -8,7 +8,7 @@ class metropolis_hastings_sampler(object):
         self.proposal_fn = proposal_fn
         self.current_state = initial_sample
         self.log_density = log_density
-        self.markov_chain = [initial_sample]
+        #self.markov_chain = [initial_sample]
         self.dtype = initial_sample.dtype
         
         
