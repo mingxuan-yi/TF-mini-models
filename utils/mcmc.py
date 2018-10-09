@@ -29,7 +29,7 @@ class metropolis_hastings_sampler(object):
         uniform_sampler = uniform(low=tf.constant(0.0, dtype=self.dtype), high=tf.constant(1.0, dtype=self.dtype))
         log_u = tf.log(uniform_sampler.sample(num_chains))
             
-        # Accept new sample if acceptance_rate > u
+        # Accept new sample if acceptance_rate > u.
         theta = tf.where(tf.greater(log_acceptance_rate - log_u, 0.0), theta_star, theta)
         assign_op = tf.assign(self.current_state, theta)
         
